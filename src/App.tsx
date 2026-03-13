@@ -25,6 +25,14 @@ interface User {
   role: string;
 }
 
+interface LevelData {
+  numCandidates: number;
+  numDelegates: number;
+  numFiles: number;
+  candidates: CandidateData[];
+  checkVotes: number[];
+}
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -33,11 +41,15 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
 
   const [level, setLevel] = useState<ElectionLevel>('Quốc hội');
-  const [numCandidates, setNumCandidates] = useState<number>(5);
-  const [numDelegates, setNumDelegates] = useState<number>(3);
-  const [numFiles, setNumFiles] = useState<number>(200);
-  const [candidates, setCandidates] = useState<CandidateData[]>([]);
-  const [checkVotes, setCheckVotes] = useState<number[]>([]);
+  
+  const [electionData, setElectionData] = useState<Record<ElectionLevel, LevelData>>({
+    'Quốc hội': { numCandidates: 5, numDelegates: 3, numFiles: 200, candidates: [], checkVotes: [] },
+    'HĐND Tỉnh': { numCandidates: 5, numDelegates: 3, numFiles: 200, candidates: [], checkVotes: [] },
+    'HĐND Xã (Phường)': { numCandidates: 5, numDelegates: 3, numFiles: 200, candidates: [], checkVotes: [] },
+  });
+
+  const { numCandidates, numDelegates, numFiles, candidates, checkVotes } = electionData[level];
+
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const levels: ElectionLevel[] = ['Quốc hội', 'HĐND Tỉnh', 'HĐND Xã (Phường)'];
@@ -83,38 +95,74 @@ export default function App() {
   };
 
   useEffect(() => {
-    const initialCandidates = Array.from({ length: numCandidates }, (_, i) => ({
-      name: candidates[i]?.name || `Ứng cử viên ${i + 1}`,
-      votes: Array.from({ length: numFiles }, (_, j) => candidates[i]?.votes[j] || 0)
-    }));
-    setCandidates(initialCandidates);
+    const current = electionData[level];
+    
+    // Check if we need to initialize or resize
+    const needsCandidateResize = current.candidates.length !== current.numCandidates;
+    const needsVoteResize = current.candidates.some(c => c.votes.length !== current.numFiles);
+    const needsCheckVoteResize = current.checkVotes.length !== current.numFiles;
 
-    const initialCheckVotes = Array.from({ length: numFiles }, (_, j) => checkVotes[j] || 0);
-    setCheckVotes(initialCheckVotes);
-  }, [numCandidates, numFiles]);
+    if (needsCandidateResize || needsVoteResize || needsCheckVoteResize) {
+      const newCandidates = Array.from({ length: current.numCandidates }, (_, i) => ({
+        name: current.candidates[i]?.name || `Ứng cử viên ${i + 1}`,
+        votes: Array.from({ length: current.numFiles }, (_, j) => current.candidates[i]?.votes[j] || 0)
+      }));
+      
+      const newCheckVotes = Array.from({ length: current.numFiles }, (_, j) => current.checkVotes[j] || 0);
+      
+      setElectionData(prev => ({
+        ...prev,
+        [level]: {
+          ...prev[level],
+          candidates: newCandidates,
+          checkVotes: newCheckVotes
+        }
+      }));
+    }
+  }, [level, electionData[level].numCandidates, electionData[level].numFiles]);
 
   const handleCandidateNameChange = (index: number, name: string) => {
-    const newCandidates = [...candidates];
-    newCandidates[index].name = name;
-    setCandidates(newCandidates);
+    setElectionData(prev => {
+      const newCandidates = [...prev[level].candidates];
+      newCandidates[index] = { ...newCandidates[index], name };
+      return {
+        ...prev,
+        [level]: { ...prev[level], candidates: newCandidates }
+      };
+    });
   };
 
   const handleVoteChange = (candidateIndex: number, fileIndex: number, value: string) => {
     const numValue = parseInt(value) || 0;
-    const newCandidates = [...candidates];
-    newCandidates[candidateIndex].votes[fileIndex] = numValue;
-    setCandidates(newCandidates);
+    setElectionData(prev => {
+      const newCandidates = [...prev[level].candidates];
+      const newVotes = [...newCandidates[candidateIndex].votes];
+      newVotes[fileIndex] = numValue;
+      newCandidates[candidateIndex] = { ...newCandidates[candidateIndex], votes: newVotes };
+      return {
+        ...prev,
+        [level]: { ...prev[level], candidates: newCandidates }
+      };
+    });
   };
 
   const handleCheckVoteChange = (fileIndex: number, value: string) => {
     const numValue = parseInt(value) || 0;
-    const newCheckVotes = [...checkVotes];
-    newCheckVotes[fileIndex] = numValue;
-    setCheckVotes(newCheckVotes);
+    setElectionData(prev => {
+      const newCheckVotes = [...prev[level].checkVotes];
+      newCheckVotes[fileIndex] = numValue;
+      return {
+        ...prev,
+        [level]: { ...prev[level], checkVotes: newCheckVotes }
+      };
+    });
   };
 
   const addMoreFiles = () => {
-    setNumFiles(prev => prev + 50);
+    setElectionData(prev => ({
+      ...prev,
+      [level]: { ...prev[level], numFiles: prev[level].numFiles + 50 }
+    }));
   };
 
   const rowTotals = useMemo(() => {
@@ -265,7 +313,10 @@ export default function App() {
                 min="1"
                 max="100"
                 value={numCandidates}
-                onChange={(e) => setNumCandidates(Math.max(1, parseInt(e.target.value) || 0))}
+                onChange={(e) => setElectionData(prev => ({
+                  ...prev,
+                  [level]: { ...prev[level], numCandidates: Math.max(1, parseInt(e.target.value) || 0) }
+                }))}
                 className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-lg"
               />
             </div>
@@ -278,7 +329,10 @@ export default function App() {
                 type="number"
                 min="1"
                 value={numDelegates}
-                onChange={(e) => setNumDelegates(Math.max(1, parseInt(e.target.value) || 0))}
+                onChange={(e) => setElectionData(prev => ({
+                  ...prev,
+                  [level]: { ...prev[level], numDelegates: Math.max(1, parseInt(e.target.value) || 0) }
+                }))}
                 className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-bold text-lg"
               />
             </div>
