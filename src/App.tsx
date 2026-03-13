@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { RefreshCw, AlertCircle, CheckCircle2, PlusCircle, Users, UserCheck, Lock, LogIn, Phone } from 'lucide-react';
+import { RefreshCw, AlertCircle, CheckCircle2, PlusCircle, Users, UserCheck, Lock, LogIn, Phone, Download } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import * as XLSX from 'xlsx';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -163,6 +164,64 @@ export default function App() {
       ...prev,
       [level]: { ...prev[level], numFiles: prev[level].numFiles + 50 }
     }));
+  };
+
+  const handleExportExcel = () => {
+    const workbook = XLSX.utils.book_new();
+
+    (Object.entries(electionData) as [ElectionLevel, LevelData][]).forEach(([lvl, data]) => {
+      if (data.candidates.length === 0) return;
+
+      // Prepare data for this sheet
+      const sheetData = [];
+      
+      // Header row: STT, Tên ứng cử viên, Tổng cộng, Phiếu 1, Phiếu 2...
+      const headers = ['STT', 'Tên ứng cử viên', 'Tổng cộng'];
+      for (let i = 0; i < data.numFiles; i++) {
+        headers.push(`Phiếu ${i + 1}`);
+      }
+      sheetData.push(headers);
+
+      // Check votes row
+      const checkRow = ['', 'Số phiếu kiểm tra', ''];
+      data.checkVotes.forEach(v => checkRow.push(v.toString()));
+      sheetData.push(checkRow);
+
+      // Candidates rows
+      data.candidates.forEach((c, idx) => {
+        const row = [
+          idx + 1,
+          c.name,
+          c.votes.reduce((a, b) => a + b, 0)
+        ];
+        c.votes.forEach(v => row.push(v));
+        sheetData.push(row);
+      });
+
+      // Column totals row
+      const colTotalsRow = ['', 'Tổng số phiếu theo cột', ''];
+      const colTotals = Array(data.numFiles).fill(0);
+      data.candidates.forEach(c => {
+        c.votes.forEach((v, i) => {
+          if (i < data.numFiles) colTotals[i] += v;
+        });
+      });
+      colTotals.forEach(t => colTotalsRow.push(t));
+      sheetData.push(colTotalsRow);
+
+      const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+      XLSX.utils.book_append_sheet(workbook, worksheet, lvl);
+    });
+
+    if (workbook.SheetNames.length === 0) {
+      setMessage({ text: "Không có dữ liệu để xuất!", type: 'error' });
+      setTimeout(() => setMessage(null), 3000);
+      return;
+    }
+
+    XLSX.writeFile(workbook, `Ket_Qua_Bau_Cu_${new Date().toISOString().split('T')[0]}.xlsx`);
+    setMessage({ text: "Đã tải file Excel thành công!", type: 'success' });
+    setTimeout(() => setMessage(null), 3000);
   };
 
   const rowTotals = useMemo(() => {
@@ -461,6 +520,14 @@ export default function App() {
         {/* Bottom Actions */}
         <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-white p-6 rounded-xl shadow-md border border-gray-200">
           <div className="flex flex-wrap gap-4">
+            <button
+              onClick={handleExportExcel}
+              className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-all shadow-lg active:scale-95"
+            >
+              <Download size={20} />
+              Tải file Excel
+            </button>
+
             <button
               onClick={() => window.location.reload()}
               className="flex items-center gap-2 px-6 py-3 bg-gray-800 text-white rounded-xl font-bold hover:bg-black transition-all shadow-lg active:scale-95"
