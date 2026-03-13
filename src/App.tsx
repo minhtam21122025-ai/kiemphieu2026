@@ -163,8 +163,9 @@ export default function App() {
             </button>
           </form>
           
-          <div className="mt-8 pt-6 border-t border-gray-100 text-center text-xs text-gray-400">
-            Hệ Thống Kiểm Phiếu Bầu Cử v2.0
+          <div className="mt-8 pt-6 border-t border-gray-100 text-center space-y-1">
+            <div className="text-xs text-gray-400 font-medium">Hệ Thống Kiểm Phiếu Bầu Cử v2.0</div>
+            <div className="text-sm font-bold text-blue-600">Bản quyền: Đào Minh Tâm - Zalo: 0366000555</div>
           </div>
         </div>
       </div>
@@ -172,14 +173,17 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4 md:p-6 font-sans">
-      <div className="max-w-[100vw] mx-auto space-y-6">
+    <div className="min-h-screen bg-gray-100 p-4 md:p-6 font-sans flex flex-col">
+      <div className="max-w-[100vw] mx-auto space-y-6 flex-grow">
         {/* Header & Config Section */}
         <div className="bg-white p-6 rounded-xl shadow-md border border-gray-200 space-y-6">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-            <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tighter">
-              Hệ Thống Kiểm Phiếu Bầu Cử
-            </h1>
+            <div className="space-y-1">
+              <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tighter">
+                Hệ Thống Kiểm Phiếu Bầu Cử
+              </h1>
+              <p className="text-xs font-bold text-blue-600">Bản quyền: Đào Minh Tâm - Zalo: 0366000555</p>
+            </div>
             <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
               {levels.map((l) => (
                 <button
@@ -378,6 +382,13 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* Footer Copyright */}
+      <footer className="mt-8 py-6 text-center border-t border-gray-200 bg-white">
+        <p className="text-sm font-black text-blue-600 uppercase tracking-widest">
+          Bản quyền: Đào Minh Tâm - Zalo: 0366000555
+        </p>
+      </footer>
 
       <style dangerouslySetInnerHTML={{ __html: `
         input[type=number]::-webkit-inner-spin-button, 
