@@ -1,0 +1,394 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect, useMemo } from 'react';
+import { RefreshCw, AlertCircle, CheckCircle2, PlusCircle, Users, UserCheck, Lock, LogIn, Phone } from 'lucide-react';
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+type ElectionLevel = 'Quốc hội' | 'HĐND Tỉnh' | 'HĐND Xã (Phường)';
+
+interface CandidateData {
+  name: string;
+  votes: number[];
+}
+
+export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginPhone, setLoginPhone] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
+  const [level, setLevel] = useState<ElectionLevel>('Quốc hội');
+  const [numCandidates, setNumCandidates] = useState<number>(5);
+  const [numDelegates, setNumDelegates] = useState<number>(3);
+  const [numFiles, setNumFiles] = useState<number>(200);
+  const [candidates, setCandidates] = useState<CandidateData[]>([]);
+  const [checkVotes, setCheckVotes] = useState<number[]>([]);
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  const levels: ElectionLevel[] = ['Quốc hội', 'HĐND Tỉnh', 'HĐND Xã (Phường)'];
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loginPhone === '0366000555' && loginPassword === '123456@') {
+      setIsLoggedIn(true);
+      setLoginError('');
+    } else {
+      setLoginError('Số điện thoại hoặc mật khẩu không chính xác!');
+    }
+  };
+
+  useEffect(() => {
+    const initialCandidates = Array.from({ length: numCandidates }, (_, i) => ({
+      name: candidates[i]?.name || `Ứng cử viên ${i + 1}`,
+      votes: Array.from({ length: numFiles }, (_, j) => candidates[i]?.votes[j] || 0)
+    }));
+    setCandidates(initialCandidates);
+
+    const initialCheckVotes = Array.from({ length: numFiles }, (_, j) => checkVotes[j] || 0);
+    setCheckVotes(initialCheckVotes);
+  }, [numCandidates, numFiles]);
+
+  const handleCandidateNameChange = (index: number, name: string) => {
+    const newCandidates = [...candidates];
+    newCandidates[index].name = name;
+    setCandidates(newCandidates);
+  };
+
+  const handleVoteChange = (candidateIndex: number, fileIndex: number, value: string) => {
+    const numValue = parseInt(value) || 0;
+    const newCandidates = [...candidates];
+    newCandidates[candidateIndex].votes[fileIndex] = numValue;
+    setCandidates(newCandidates);
+  };
+
+  const handleCheckVoteChange = (fileIndex: number, value: string) => {
+    const numValue = parseInt(value) || 0;
+    const newCheckVotes = [...checkVotes];
+    newCheckVotes[fileIndex] = numValue;
+    setCheckVotes(newCheckVotes);
+  };
+
+  const addMoreFiles = () => {
+    setNumFiles(prev => prev + 50);
+  };
+
+  const rowTotals = useMemo(() => {
+    return candidates.map(c => c.votes.reduce((sum, v) => sum + v, 0));
+  }, [candidates]);
+
+  const totalCheckVotes = useMemo(() => {
+    return checkVotes.reduce((sum, v) => sum + v, 0);
+  }, [checkVotes]);
+
+  const colTotals = useMemo(() => {
+    const totals = Array(numFiles).fill(0);
+    candidates.forEach(c => {
+      c.votes.forEach((v, i) => {
+        if (i < numFiles) totals[i] += v;
+      });
+    });
+    return totals;
+  }, [candidates, numFiles]);
+
+  const validationResults = useMemo(() => {
+    return colTotals.map((total, i) => {
+      const checkVal = checkVotes[i];
+      if (checkVal === 0) return total === 0;
+      const isTotalCorrect = total === (checkVal * numDelegates);
+      const hasInvalidCandidate = candidates.some(c => c.votes[i] > checkVal);
+      return isTotalCorrect && !hasInvalidCandidate;
+    });
+  }, [colTotals, checkVotes, candidates, numDelegates]);
+
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4 font-sans">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-2xl p-8 border border-gray-200">
+          <div className="text-center space-y-2 mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 text-blue-600 rounded-full mb-2">
+              <Lock size={32} />
+            </div>
+            <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Đăng nhập hệ thống</h1>
+            <p className="text-gray-500 text-sm">Vui lòng nhập thông tin để truy cập phần mềm kiểm phiếu</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700 uppercase flex items-center gap-2">
+                <Phone size={16} /> Số điện thoại
+              </label>
+              <input
+                type="text"
+                value={loginPhone}
+                onChange={(e) => setLoginPhone(e.target.value)}
+                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-medium"
+                placeholder="Nhập số điện thoại..."
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-gray-700 uppercase flex items-center gap-2">
+                <Lock size={16} /> Mật khẩu
+              </label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-medium"
+                placeholder="Nhập mật khẩu..."
+                required
+              />
+            </div>
+
+            {loginError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-sm font-bold rounded-xl flex items-center gap-2">
+                <AlertCircle size={16} /> {loginError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full py-4 bg-blue-600 text-white rounded-xl font-black uppercase tracking-wider hover:bg-blue-700 transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2"
+            >
+              <LogIn size={20} /> Đăng nhập
+            </button>
+          </form>
+          
+          <div className="mt-8 pt-6 border-t border-gray-100 text-center text-xs text-gray-400">
+            Hệ Thống Kiểm Phiếu Bầu Cử v2.0
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-100 p-4 md:p-6 font-sans">
+      <div className="max-w-[100vw] mx-auto space-y-6">
+        {/* Header & Config Section */}
+        <div className="bg-white p-6 rounded-xl shadow-md border border-gray-200 space-y-6">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+            <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tighter">
+              Hệ Thống Kiểm Phiếu Bầu Cử
+            </h1>
+            <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
+              {levels.map((l) => (
+                <button
+                  key={l}
+                  onClick={() => setLevel(l)}
+                  className={cn(
+                    "px-4 py-2 rounded-lg font-bold transition-all text-sm",
+                    level === l 
+                      ? "bg-white text-blue-600 shadow-sm" 
+                      : "text-gray-500 hover:text-gray-700"
+                  )}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-gray-100">
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-bold text-gray-700 uppercase">
+                <Users size={16} className="text-blue-500" />
+                Số người ứng cử
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={numCandidates}
+                onChange={(e) => setNumCandidates(Math.max(1, parseInt(e.target.value) || 0))}
+                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-lg"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-bold text-gray-700 uppercase">
+                <UserCheck size={16} className="text-green-500" />
+                Số người cần bầu
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={numDelegates}
+                onChange={(e) => setNumDelegates(Math.max(1, parseInt(e.target.value) || 0))}
+                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-bold text-lg"
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={addMoreFiles}
+                className="w-full flex items-center justify-center gap-2 p-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg active:scale-95"
+              >
+                <PlusCircle size={20} />
+                Thêm 50 tệp (Hiện có: {numFiles})
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Table Container with Horizontal Scroll */}
+        <div className="bg-white rounded-xl shadow-2xl border border-gray-300 overflow-hidden">
+          <div className="overflow-x-auto max-h-[70vh]">
+            <table className="w-full border-collapse text-xs md:text-sm table-fixed">
+              <thead className="sticky top-0 z-20">
+                {/* Main Header */}
+                <tr className="bg-[#ffc000] text-black font-bold uppercase">
+                  <th className="border border-black p-2 w-12 sticky left-0 z-30 bg-[#ffc000]">TT</th>
+                  <th className="border border-black p-2 w-64 sticky left-12 z-30 bg-[#ffc000]">Họ và tên ứng cử viên</th>
+                  <th className="border border-black p-2 w-24 sticky left-[304px] z-30 bg-[#ffc000] text-center">CỘNG</th>
+                  {Array.from({ length: numFiles }).map((_, i) => (
+                    <th key={i} className="border border-black p-2 w-20 min-w-[80px]">Tệp {i + 1}</th>
+                  ))}
+                </tr>
+                
+                {/* Row: Số phiếu kiểm tra */}
+                <tr className="bg-white">
+                  <td className="border border-black p-2 text-center font-bold sticky left-0 z-10 bg-white">#</td>
+                  <td className="border border-black p-2 text-red-600 font-bold italic sticky left-12 z-10 bg-white">Số phiếu kiểm tra</td>
+                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-yellow-50 sticky left-[304px] z-10">
+                    {totalCheckVotes}
+                  </td>
+                  {checkVotes.map((val, i) => (
+                    <td key={i} className="border border-black p-0">
+                      <input
+                        type="number"
+                        value={val || ''}
+                        onChange={(e) => handleCheckVoteChange(i, e.target.value)}
+                        className="w-full h-full p-2 text-center text-red-600 font-bold border-none focus:ring-0 outline-none bg-transparent"
+                        placeholder="0"
+                      />
+                    </td>
+                  ))}
+                </tr>
+              </thead>
+              
+              <tbody>
+                {candidates.map((candidate, cIdx) => (
+                  <tr key={cIdx} className="hover:bg-gray-50 group">
+                    <td className="border border-black p-2 text-center font-medium text-gray-400 sticky left-0 z-10 bg-white group-hover:bg-gray-50">
+                      {cIdx + 1}
+                    </td>
+                    <td className="border border-black p-0 sticky left-12 z-10 bg-white group-hover:bg-gray-50">
+                      <input
+                        type="text"
+                        value={candidate.name}
+                        onChange={(e) => handleCandidateNameChange(cIdx, e.target.value)}
+                        className="w-full p-2 font-semibold text-gray-800 border-none focus:ring-0 outline-none bg-transparent"
+                        placeholder={`Tên ứng cử viên ${cIdx + 1}`}
+                      />
+                    </td>
+                    <td className="border border-black p-2 text-center font-bold bg-yellow-50 text-blue-700 sticky left-[304px] z-10 group-hover:bg-yellow-100">
+                      {rowTotals[cIdx]}
+                    </td>
+                    {candidate.votes.map((vote, vIdx) => (
+                      <td key={vIdx} className="border border-black p-0">
+                        <input
+                          type="number"
+                          min="0"
+                          value={vote || ''}
+                          onChange={(e) => handleVoteChange(cIdx, vIdx, e.target.value)}
+                          className={cn(
+                            "w-full h-full p-2 text-center border-none focus:ring-1 focus:ring-blue-300 outline-none transition-all",
+                            vote > checkVotes[vIdx] && checkVotes[vIdx] > 0 ? "bg-red-100 text-red-600 font-bold" : "bg-transparent"
+                          )}
+                          placeholder="0"
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+
+              <tfoot className="sticky bottom-0 z-20">
+                {/* Tổng số phiếu */}
+                <tr className="bg-gray-100">
+                  <td className="border border-black p-2 sticky left-0 z-10 bg-gray-100"></td>
+                  <td className="border border-black p-2 text-red-600 font-bold uppercase sticky left-12 z-10 bg-gray-100">Tổng số phiếu</td>
+                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-red-50 sticky left-[304px] z-10">
+                    {rowTotals.reduce((a, b) => a + b, 0)}
+                  </td>
+                  {colTotals.map((total, i) => (
+                    <td key={i} className="border border-black p-2 text-center font-bold text-red-600">
+                      {total}
+                    </td>
+                  ))}
+                </tr>
+
+                {/* Kiểm tra Đúng/Sai */}
+                <tr className="bg-[#ffc000]">
+                  <td className="border border-black p-2 sticky left-0 z-10 bg-[#ffc000]"></td>
+                  <td className="border border-black p-2 font-bold uppercase sticky left-12 z-10 bg-[#ffc000]">Kiểm tra Đúng/Sai</td>
+                  <td className="border border-black p-2 sticky left-[304px] z-10 bg-[#ffc000]"></td>
+                  {validationResults.map((isValid, i) => (
+                    <td 
+                      key={i} 
+                      className={cn(
+                        "border border-black p-2 text-center font-black",
+                        isValid ? "text-black" : "text-red-600"
+                      )}
+                    >
+                      {isValid ? "Đúng" : "Sai"}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        {/* Bottom Actions */}
+        <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-white p-6 rounded-xl shadow-md border border-gray-200">
+          <div className="flex flex-wrap gap-4">
+            <button
+              onClick={() => window.location.reload()}
+              className="flex items-center gap-2 px-6 py-3 bg-gray-800 text-white rounded-xl font-bold hover:bg-black transition-all shadow-lg active:scale-95"
+            >
+              <RefreshCw size={20} />
+              Làm mới trang
+            </button>
+            
+            <button
+              onClick={() => setIsLoggedIn(false)}
+              className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg active:scale-95"
+            >
+              Đăng xuất
+            </button>
+          </div>
+
+          {message && (
+            <div className={cn(
+              "flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-lg shadow-inner",
+              message.type === 'success' ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"
+            )}>
+              {message.type === 'success' ? <CheckCircle2 size={24} /> : <AlertCircle size={24} />}
+              {message.text}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+          -webkit-appearance: none; 
+          margin: 0; 
+        }
+        input[type=number] {
+          -moz-appearance: textfield;
+        }
+      `}} />
+    </div>
+  );
+}
