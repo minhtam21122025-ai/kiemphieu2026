@@ -19,8 +19,15 @@ interface CandidateData {
   votes: number[];
 }
 
+interface User {
+  phone: string;
+  name: string;
+  role: string;
+}
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginPhone, setLoginPhone] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -35,11 +42,41 @@ export default function App() {
 
   const levels: ElectionLevel[] = ['Quốc hội', 'HĐND Tỉnh', 'HĐND Xã (Phường)'];
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError('');
+    
+    // 1. Kiểm tra tài khoản Admin cứng (Dự phòng)
     if (loginPhone === '0366000555' && loginPassword === '123456@') {
+      setCurrentUser({ phone: '0366000555', name: 'Đào Minh Tâm', role: 'admin' });
       setIsLoggedIn(true);
-      setLoginError('');
+      return;
+    }
+
+    // 2. Kiểm tra qua Google Apps Script (Nếu có cấu hình URL)
+    // Bạn dán URL Web App của Google Script vào đây
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbwNGmsC0460QYAEL6ALosoT3A_AWhDpZNZpcOaepObUuMnxsWOCMLKSlOI3D_elqUeF/exec"; 
+
+    if (GAS_URL) {
+      try {
+        const response = await fetch(GAS_URL, {
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'login',
+            phone: loginPhone,
+            password: loginPassword
+          })
+        });
+        const result = await response.json();
+        if (result.success) {
+          setCurrentUser(result.user);
+          setIsLoggedIn(true);
+        } else {
+          setLoginError(result.message || 'Thông tin đăng nhập không chính xác');
+        }
+      } catch (error) {
+        setLoginError('Không thể kết nối với máy chủ xác thực!');
+      }
     } else {
       setLoginError('Số điện thoại hoặc mật khẩu không chính xác!');
     }
@@ -184,6 +221,21 @@ export default function App() {
               </h1>
               <p className="text-xs font-bold text-blue-600">Bản quyền: Đào Minh Tâm - Zalo: 0366000555</p>
             </div>
+
+            {currentUser && (
+              <div className="flex items-center gap-3 bg-blue-50 px-4 py-2 rounded-2xl border border-blue-100 shadow-sm">
+                <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-black shadow-md">
+                  {currentUser.name.charAt(0).toUpperCase()}
+                </div>
+                <div className="text-left hidden sm:block">
+                  <div className="text-sm font-black text-gray-900 leading-tight">{currentUser.name}</div>
+                  <div className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">
+                    {currentUser.role === 'admin' ? 'Quản trị viên' : 'Người dùng'}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
               {levels.map((l) => (
                 <button
@@ -364,7 +416,10 @@ export default function App() {
             </button>
             
             <button
-              onClick={() => setIsLoggedIn(false)}
+              onClick={() => {
+                setIsLoggedIn(false);
+                setCurrentUser(null);
+              }}
               className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg active:scale-95"
             >
               Đăng xuất
