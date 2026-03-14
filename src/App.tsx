@@ -59,14 +59,7 @@ export default function App() {
     e.preventDefault();
     setLoginError('');
     
-    // 1. Kiểm tra tài khoản Admin cứng (Dự phòng)
-    if (loginPhone === '0366000555' && loginPassword === '123456@') {
-      setCurrentUser({ phone: '0366000555', name: 'Đào Minh Tâm', role: 'admin' });
-      setIsLoggedIn(true);
-      return;
-    }
-
-    // 2. Kiểm tra qua Google Apps Script (Nếu có cấu hình URL)
+    // 1. Kiểm tra qua Google Apps Script (Nếu có cấu hình URL)
     // Bạn dán URL Web App của Google Script vào đây
     const GAS_URL = "https://script.google.com/macros/s/AKfycbwNGmsC0460QYAEL6ALosoT3A_AWhDpZNZpcOaepObUuMnxsWOCMLKSlOI3D_elqUeF/exec"; 
 
@@ -209,6 +202,18 @@ export default function App() {
       colTotals.forEach(t => colTotalsRow.push(t));
       sheetData.push(colTotalsRow);
 
+      // Add percentage column to sheetData (optional, but requested for UI)
+      // Since sheetData is already built, let's insert it into the rows
+      const totalCV = data.checkVotes.reduce((a, b) => a + b, 0);
+      sheetData[0].splice(3, 0, '%'); // Header
+      sheetData[1].splice(3, 0, ''); // Check votes row
+      data.candidates.forEach((c, idx) => {
+        const candidateTotal = c.votes.reduce((a, b) => a + b, 0);
+        const percentage = totalCV > 0 ? ((candidateTotal / totalCV) * 100).toFixed(2) + '%' : '0%';
+        sheetData[idx + 2].splice(3, 0, percentage);
+      });
+      sheetData[sheetData.length - 1].splice(3, 0, ''); // Col totals row
+
       const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
       XLSX.utils.book_append_sheet(workbook, worksheet, lvl);
     });
@@ -251,6 +256,12 @@ export default function App() {
       return isTotalCorrect && !hasInvalidCandidate;
     });
   }, [colTotals, checkVotes, candidates, numDelegates]);
+
+  const isGrandTotalValid = useMemo(() => {
+    const grandTotal = rowTotals.reduce((a, b) => a + b, 0);
+    if (totalCheckVotes === 0) return grandTotal === 0;
+    return grandTotal === (totalCheckVotes * numDelegates);
+  }, [rowTotals, totalCheckVotes, numDelegates]);
 
   if (!isLoggedIn) {
     return (
@@ -417,6 +428,7 @@ export default function App() {
                   <th className="border border-black p-2 w-12 sticky left-0 z-30 bg-[#ffc000]">TT</th>
                   <th className="border border-black p-2 w-64 sticky left-12 z-30 bg-[#ffc000]">Họ và tên ứng cử viên</th>
                   <th className="border border-black p-2 w-24 sticky left-[304px] z-30 bg-[#ffc000] text-center">CỘNG</th>
+                  <th className="border border-black p-2 w-20 sticky left-[400px] z-30 bg-[#ffc000] text-center">%</th>
                   {Array.from({ length: numFiles }).map((_, i) => (
                     <th key={i} className="border border-black p-2 w-20 min-w-[80px]">Tệp {i + 1}</th>
                   ))}
@@ -428,6 +440,9 @@ export default function App() {
                   <td className="border border-black p-2 text-red-600 font-bold italic sticky left-12 z-10 bg-white">Số phiếu kiểm tra</td>
                   <td className="border border-black p-2 text-center font-bold text-red-600 bg-yellow-50 sticky left-[304px] z-10">
                     {totalCheckVotes}
+                  </td>
+                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-yellow-50 sticky left-[400px] z-10">
+                    -
                   </td>
                   {checkVotes.map((val, i) => (
                     <td key={i} className="border border-black p-0">
@@ -461,6 +476,9 @@ export default function App() {
                     <td className="border border-black p-2 text-center font-bold bg-yellow-50 text-blue-700 sticky left-[304px] z-10 group-hover:bg-yellow-100">
                       {rowTotals[cIdx]}
                     </td>
+                    <td className="border border-black p-2 text-center font-bold bg-blue-50 text-blue-800 sticky left-[400px] z-10 group-hover:bg-blue-100">
+                      {totalCheckVotes > 0 ? ((rowTotals[cIdx] / totalCheckVotes) * 100).toFixed(2) : '0.00'}%
+                    </td>
                     {candidate.votes.map((vote, vIdx) => (
                       <td key={vIdx} className="border border-black p-0">
                         <input
@@ -488,6 +506,9 @@ export default function App() {
                   <td className="border border-black p-2 text-center font-bold text-red-600 bg-red-50 sticky left-[304px] z-10">
                     {rowTotals.reduce((a, b) => a + b, 0)}
                   </td>
+                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-red-50 sticky left-[400px] z-10">
+                    -
+                  </td>
                   {colTotals.map((total, i) => (
                     <td key={i} className="border border-black p-2 text-center font-bold text-red-600">
                       {total}
@@ -499,7 +520,13 @@ export default function App() {
                 <tr className="bg-[#ffc000]">
                   <td className="border border-black p-2 sticky left-0 z-10 bg-[#ffc000]"></td>
                   <td className="border border-black p-2 font-bold uppercase sticky left-12 z-10 bg-[#ffc000]">Kiểm tra Đúng/Sai</td>
-                  <td className="border border-black p-2 sticky left-[304px] z-10 bg-[#ffc000]"></td>
+                  <td className={cn(
+                    "border border-black p-2 text-center font-black sticky left-[304px] z-10",
+                    isGrandTotalValid ? "text-green-700" : "text-red-700"
+                  )}>
+                    {isGrandTotalValid ? "ĐÚNG" : "SAI"}
+                  </td>
+                  <td className="border border-black p-2 sticky left-[400px] z-10 bg-[#ffc000]"></td>
                   {validationResults.map((isValid, i) => (
                     <td 
                       key={i} 
