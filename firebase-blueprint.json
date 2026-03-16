@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "ElectionLevel": {
+      "title": "Election Level Data",
+      "description": "Stores the election data for a specific level (e.g., BCH, BTV).",
+      "type": "object",
+      "properties": {
+        "numCandidates": { "type": "integer" },
+        "numDelegates": { "type": "integer" },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "votes": { "type": "array", "items": { "type": "integer" } }
+            }
+          }
+        },
+        "checkVotes": { "type": "array", "items": { "type": "integer" } },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["numCandidates", "numDelegates", "candidates", "checkVotes"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Stores user-specific metadata.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "lastLevel": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document."
+    },
+    "/users/{userId}/levels/{levelId}": {
+      "schema": "ElectionLevel",
+      "description": "Election data for a specific level."
+    }
+  }
+}

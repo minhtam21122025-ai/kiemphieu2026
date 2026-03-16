@@ -3,11 +3,109 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { RefreshCw, AlertCircle, CheckCircle2, PlusCircle, Users, UserCheck, Lock, LogIn, Phone, Download } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, Component } from 'react';
+import { RefreshCw, AlertCircle, CheckCircle2, PlusCircle, Users, UserCheck, Lock, LogIn, Phone, Download, Camera, Scan, X } from 'lucide-react';
+import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import * as XLSX from 'xlsx';
+import { auth, db, googleProvider, signInWithPopup, signOut, onAuthStateChanged, doc, setDoc, getDoc, onSnapshot, Timestamp, collection, signInAnonymously } from './firebase';
+import type { User as FirebaseUser } from './firebase';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-red-50 flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-white p-8 rounded-2xl shadow-xl border border-red-200 text-center space-y-4">
+            <AlertCircle size={64} className="text-red-500 mx-auto" />
+            <h2 className="text-2xl font-black text-gray-900">Đã có lỗi xảy ra</h2>
+            <p className="text-gray-600">Hệ thống gặp sự cố không mong muốn. Vui lòng tải lại trang hoặc liên hệ quản trị viên.</p>
+            <div className="p-4 bg-gray-50 rounded-lg text-left overflow-auto max-h-40">
+              <code className="text-xs text-red-600">{this.state.error?.message}</code>
+            </div>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all"
+            >
+              Tải lại trang
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -21,9 +119,10 @@ interface CandidateData {
 }
 
 interface User {
-  phone: string;
+  uid: string;
+  email: string | null;
   name: string;
-  role: string;
+  photoURL: string | null;
 }
 
 interface LevelData {
@@ -34,12 +133,173 @@ interface LevelData {
   checkVotes: number[];
 }
 
-export default function App() {
+const CameraScanner = ({ 
+  onScan, 
+  onClose, 
+  numCandidates, 
+  numDelegates 
+}: { 
+  onScan: (votes: number[]) => void; 
+  onClose: () => void;
+  numCandidates: number;
+  numDelegates: number;
+}) => {
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    async function startCamera() {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'environment' } 
+        });
+        setStream(s);
+        if (videoRef.current) {
+          videoRef.current.srcObject = s;
+        }
+      } catch (err) {
+        console.error("Error accessing camera:", err);
+        alert("Không thể truy cập camera. Vui lòng kiểm tra quyền truy cập.");
+        onClose();
+      }
+    }
+    startCamera();
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  const captureAndAnalyze = async () => {
+    if (!videoRef.current || !canvasRef.current || isAnalyzing) return;
+
+    setIsAnalyzing(true);
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.drawImage(video, 0, 0);
+    // Reduce quality to 0.7 to speed up upload and analysis without losing critical detail
+    const base64Image = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [
+          {
+            parts: [
+              { text: `Identify votes for ${numCandidates} candidates. Exactly ${numDelegates} votes required.` },
+              { inlineData: { mimeType: "image/jpeg", data: base64Image } }
+            ]
+          }
+        ],
+        config: { 
+          systemInstruction: "You are a high-speed ballot scanner. ONLY report what is explicitly marked in the image. DO NOT invent candidates or votes. If exactly " + numDelegates + " votes are not clearly visible, mark isValid as false. Output ONLY JSON.",
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              isValid: { type: Type.BOOLEAN },
+              votes: { 
+                type: Type.ARRAY, 
+                items: { type: Type.INTEGER },
+                description: `Array of exactly ${numCandidates} integers (1 for voted, 0 for not)`
+              }
+            },
+            required: ["isValid", "votes"]
+          }
+        }
+      });
+
+      const result = JSON.parse(response.text);
+      if (result.isValid && result.votes.filter((v: number) => v === 1).length === numDelegates) {
+        onScan(result.votes);
+      } else {
+        alert("Phiếu không hợp lệ hoặc không đúng số lượng bầu (Cần bầu " + numDelegates + "). Vui lòng thử lại.");
+      }
+    } catch (err) {
+      console.error("AI Analysis error:", err);
+      alert("Lỗi khi phân tích hình ảnh. Vui lòng thử lại.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-4">
+      <div className="relative w-full max-w-lg aspect-[3/4] bg-gray-900 rounded-2xl overflow-hidden shadow-2xl border-2 border-blue-500">
+        <video 
+          ref={videoRef} 
+          autoPlay 
+          playsInline 
+          className="w-full h-full object-cover"
+        />
+        <canvas ref={canvasRef} className="hidden" />
+        
+        <div className="absolute inset-0 border-[40px] border-black/40 pointer-events-none">
+          <div className="w-full h-full border-2 border-dashed border-white/50 rounded-lg" />
+        </div>
+
+        <button 
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 bg-black/50 text-white rounded-full hover:bg-black/70 transition-colors"
+        >
+          <X size={24} />
+        </button>
+
+        {isAnalyzing && (
+          <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center text-white space-y-4">
+            <RefreshCw size={48} className="animate-spin text-blue-400" />
+            <p className="font-bold text-lg animate-pulse">Đang phân tích phiếu...</p>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-8 flex flex-col items-center space-y-4 w-full max-w-md">
+        <p className="text-white/70 text-sm text-center">
+          Đưa phiếu vào khung hình và nhấn nút để quét.<br/>
+          Yêu cầu bầu đúng <span className="text-blue-400 font-bold">{numDelegates}</span> người.
+        </p>
+        <button
+          onClick={captureAndAnalyze}
+          disabled={isAnalyzing}
+          className="w-full flex items-center justify-center gap-3 p-5 bg-blue-600 text-white rounded-2xl font-bold text-xl shadow-xl hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50"
+        >
+          <Scan size={28} />
+          {isAnalyzing ? 'Đang xử lý...' : 'CHỤP & QUÉT PHIẾU'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const GAS_URL = ""; // Dán URL Web App từ Apps Script vào đây
+
+export default function AppWrapper() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}
+
+function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [loginPhone, setLoginPhone] = useState('');
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  
+  const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [level, setLevel] = useState<ElectionLevel>('Quốc hội');
   
@@ -49,43 +309,183 @@ export default function App() {
     'HĐND Xã (Phường)': { numCandidates: 5, numDelegates: 3, numFiles: 200, candidates: [], checkVotes: [] },
   });
 
+  const isRemoteUpdate = useRef(false);
+  const saveTimeout = useRef<NodeJS.Timeout | null>(null);
+
   const { numCandidates, numDelegates, numFiles, candidates, checkVotes } = electionData[level];
 
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const levels: ElectionLevel[] = ['Quốc hội', 'HĐND Tỉnh', 'HĐND Xã (Phường)'];
 
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [targetTepIndex, setTargetTepIndex] = useState(0);
+
+  // Firebase Auth Listener (Dùng để duy trì session Firebase cho sync)
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user: FirebaseUser | null) => {
+      // Nếu đã login qua GAS thì không cần quan tâm user Firebase ở đây
+      // trừ khi muốn dùng uid của nó.
+      setIsAuthReady(true);
+    });
+    
+    // Kiểm tra session cũ từ localStorage
+    const savedUser = localStorage.getItem('election_user');
+    if (savedUser) {
+      setCurrentUser(JSON.parse(savedUser));
+      setIsLoggedIn(true);
+    }
+    
+    return () => unsubscribe();
+  }, []);
+
+  // Firebase Real-time Sync (Listen for changes)
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser) return;
+
+    const sanitizedEmail = currentUser.email?.replace(/[.#$[\]]/g, '_') || 'unknown';
+
+    const unsubscribes = levels.map(lvl => {
+      const path = `users/${sanitizedEmail}/levels/${lvl}`;
+      return onSnapshot(doc(db, 'users', sanitizedEmail, 'levels', lvl), (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          isRemoteUpdate.current = true;
+          setElectionData(prev => ({
+            ...prev,
+            [lvl]: {
+              ...prev[lvl],
+              numCandidates: data.numCandidates,
+              numDelegates: data.numDelegates,
+              candidates: data.candidates,
+              checkVotes: data.checkVotes
+            }
+          }));
+          setTimeout(() => { isRemoteUpdate.current = false; }, 100);
+        }
+      }, (error) => {
+        // handleFirestoreError(error, OperationType.GET, path);
+        console.error("Sync error:", error);
+      });
+    });
+
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [isLoggedIn, currentUser?.email]);
+
+  // Save to Firebase when local data changes
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser || isRemoteUpdate.current) return;
+
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+
+    saveTimeout.current = setTimeout(async () => {
+      const sanitizedEmail = currentUser.email?.replace(/[.#$[\]]/g, '_') || 'unknown';
+      const path = `users/${sanitizedEmail}/levels/${level}`;
+      try {
+        const currentData = electionData[level];
+        if (currentData.candidates.length === 0) return;
+
+        await setDoc(doc(db, 'users', sanitizedEmail, 'levels', level), {
+          numCandidates: currentData.numCandidates,
+          numDelegates: currentData.numDelegates,
+          candidates: currentData.candidates,
+          checkVotes: currentData.checkVotes,
+          updatedAt: Timestamp.now()
+        }, { merge: true });
+      } catch (error) {
+        // handleFirestoreError(error, OperationType.WRITE, path);
+        console.error("Save error:", error);
+      }
+    }, 1000); // Debounce saves
+
+    return () => {
+      if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    };
+  }, [electionData, level, isLoggedIn, currentUser?.email]);
+
+  const handleScanSuccess = (votes: number[]) => {
+    setElectionData(prev => {
+      const current = prev[level];
+      const newCandidates = current.candidates.map((c, i) => {
+        const newVotes = [...c.votes];
+        if (votes[i] === 1) {
+          newVotes[targetTepIndex] = (newVotes[targetTepIndex] || 0) + 1;
+        }
+        return { ...c, votes: newVotes };
+      });
+
+      const newCheckVotes = [...current.checkVotes];
+      newCheckVotes[targetTepIndex] = (newCheckVotes[targetTepIndex] || 0) + 1;
+
+      return {
+        ...prev,
+        [level]: {
+          ...prev[level],
+          candidates: newCandidates,
+          checkVotes: newCheckVotes
+        }
+      };
+    });
+    setMessage({ text: "Đã quét và cộng phiếu thành công!", type: 'success' });
+    setTimeout(() => setMessage(null), 3000);
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoginError('');
-    
-    // 1. Kiểm tra qua Google Apps Script (Nếu có cấu hình URL)
-    // Bạn dán URL Web App của Google Script vào đây
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbwNGmsC0460QYAEL6ALosoT3A_AWhDpZNZpcOaepObUuMnxsWOCMLKSlOI3D_elqUeF/exec"; 
-
-    if (GAS_URL) {
-      try {
-        const response = await fetch(GAS_URL, {
-          method: 'POST',
-          body: JSON.stringify({
-            action: 'login',
-            phone: loginPhone,
-            password: loginPassword
-          })
-        });
-        const result = await response.json();
-        if (result.success) {
-          setCurrentUser(result.user);
-          setIsLoggedIn(true);
-        } else {
-          setLoginError(result.message || 'Thông tin đăng nhập không chính xác');
-        }
-      } catch (error) {
-        setLoginError('Không thể kết nối với máy chủ xác thực!');
-      }
-    } else {
-      setLoginError('Số điện thoại hoặc mật khẩu không chính xác!');
+    if (!GAS_URL) {
+      setLoginError("Chưa cấu hình GAS_URL. Vui lòng dán URL Web App vào code.");
+      return;
     }
+
+    setIsLoggingIn(true);
+    setLoginError('');
+
+    try {
+      const response = await fetch(GAS_URL, {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'login',
+          email: loginEmail,
+          password: loginPassword
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        const userData: User = {
+          uid: result.user.email, // Dùng email làm UID
+          email: result.user.email,
+          name: result.user.name,
+          photoURL: null
+        };
+        
+        setCurrentUser(userData);
+        setIsLoggedIn(true);
+        localStorage.setItem('election_user', JSON.stringify(userData));
+        
+        // Login ẩn danh vào Firebase để có session cho Firestore sync
+        try {
+          await signInAnonymously(auth); 
+        } catch (fbErr) {
+          console.error("Firebase anonymous login failed:", fbErr);
+        }
+      } else {
+        setLoginError(result.message || "Đăng nhập thất bại");
+      }
+    } catch (error) {
+      console.error("Login error:", error);
+      setLoginError("Lỗi kết nối đến Server Google Sheet");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setCurrentUser(null);
+    setIsLoggedIn(false);
+    localStorage.removeItem('election_user');
+    await signOut(auth);
   };
 
   useEffect(() => {
@@ -263,6 +663,14 @@ export default function App() {
     return grandTotal === (totalCheckVotes * numDelegates);
   }, [rowTotals, totalCheckVotes, numDelegates]);
 
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <RefreshCw size={48} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4 font-sans">
@@ -272,27 +680,27 @@ export default function App() {
               <Lock size={32} />
             </div>
             <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Đăng nhập hệ thống</h1>
-            <p className="text-gray-500 text-sm">Vui lòng nhập thông tin để truy cập phần mềm kiểm phiếu</p>
+            <p className="text-gray-500 text-sm">Vui lòng nhập Email và Mật khẩu được cấp trên Google Sheet</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
             <div className="space-y-2">
               <label className="text-sm font-bold text-gray-700 uppercase flex items-center gap-2">
-                <Phone size={16} /> Số điện thoại
+                <LogIn size={16} className="text-blue-500" /> Email (Gmail)
               </label>
               <input
-                type="text"
-                value={loginPhone}
-                onChange={(e) => setLoginPhone(e.target.value)}
+                type="email"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
                 className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-medium"
-                placeholder="Nhập số điện thoại..."
+                placeholder="example@gmail.com"
                 required
               />
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-bold text-gray-700 uppercase flex items-center gap-2">
-                <Lock size={16} /> Mật khẩu
+                <Lock size={16} className="text-blue-500" /> Mật khẩu
               </label>
               <input
                 type="password"
@@ -305,16 +713,18 @@ export default function App() {
             </div>
 
             {loginError && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-sm font-bold rounded-xl flex items-center gap-2">
+              <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs font-bold rounded-xl flex items-center gap-2">
                 <AlertCircle size={16} /> {loginError}
               </div>
             )}
 
             <button
               type="submit"
-              className="w-full py-4 bg-blue-600 text-white rounded-xl font-black uppercase tracking-wider hover:bg-blue-700 transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2"
+              disabled={isLoggingIn}
+              className="w-full py-4 bg-blue-600 text-white rounded-xl font-black uppercase tracking-wider hover:bg-blue-700 transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <LogIn size={20} /> Đăng nhập
+              {isLoggingIn ? <RefreshCw size={20} className="animate-spin" /> : <LogIn size={20} />}
+              {isLoggingIn ? 'Đang kiểm tra...' : 'Đăng nhập'}
             </button>
           </form>
           
@@ -342,27 +752,31 @@ export default function App() {
 
             {currentUser && (
               <div className="flex items-center gap-3 bg-blue-50 px-4 py-2 rounded-2xl border border-blue-100 shadow-sm">
-                <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-black shadow-md">
-                  {currentUser.name.charAt(0).toUpperCase()}
-                </div>
+                {currentUser.photoURL ? (
+                  <img src={currentUser.photoURL} alt={currentUser.name} className="w-10 h-10 rounded-full shadow-md" />
+                ) : (
+                  <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-black shadow-md">
+                    {currentUser.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
                 <div className="text-left hidden sm:block">
                   <div className="text-sm font-black text-gray-900 leading-tight">{currentUser.name}</div>
                   <div className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">
-                    {currentUser.role === 'admin' ? 'Quản trị viên' : 'Người dùng'}
+                    Đã kết nối
                   </div>
                 </div>
               </div>
             )}
 
-            <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
+            <div className="flex flex-wrap gap-2 bg-gray-100 p-1.5 rounded-xl">
               {levels.map((l) => (
                 <button
                   key={l}
                   onClick={() => setLevel(l)}
                   className={cn(
-                    "px-4 py-2 rounded-lg font-bold transition-all text-sm",
+                    "flex-1 min-w-[120px] px-3 py-3 rounded-lg font-bold transition-all text-sm md:text-base",
                     level === l 
-                      ? "bg-white text-blue-600 shadow-sm" 
+                      ? "bg-white text-blue-600 shadow-md scale-[1.02]" 
                       : "text-gray-500 hover:text-gray-700"
                   )}
                 >
@@ -372,51 +786,87 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-gray-100">
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-sm font-bold text-gray-700 uppercase">
-                <Users size={16} className="text-blue-500" />
-                Số người ứng cử
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6 pt-4 border-t border-gray-100">
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-2 text-[10px] md:text-sm font-bold text-gray-700 uppercase">
+                <Users size={14} className="text-blue-500" />
+                Số ứng cử
               </label>
               <input
                 type="number"
+                inputMode="numeric"
                 min="1"
                 max="100"
                 value={numCandidates}
+                onFocus={(e) => e.target.select()}
                 onChange={(e) => setElectionData(prev => ({
                   ...prev,
                   [level]: { ...prev[level], numCandidates: Math.max(1, parseInt(e.target.value) || 0) }
                 }))}
-                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-lg"
+                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-base md:text-lg h-12 md:h-14"
               />
             </div>
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-sm font-bold text-gray-700 uppercase">
-                <UserCheck size={16} className="text-green-500" />
-                Số người cần bầu
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-2 text-[10px] md:text-sm font-bold text-gray-700 uppercase">
+                <UserCheck size={14} className="text-green-500" />
+                Cần bầu
               </label>
               <input
                 type="number"
+                inputMode="numeric"
                 min="1"
                 value={numDelegates}
+                onFocus={(e) => e.target.select()}
                 onChange={(e) => setElectionData(prev => ({
                   ...prev,
                   [level]: { ...prev[level], numDelegates: Math.max(1, parseInt(e.target.value) || 0) }
                 }))}
-                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-bold text-lg"
+                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-bold text-base md:text-lg h-12 md:h-14"
               />
             </div>
-            <div className="flex items-end">
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-2 text-[10px] md:text-sm font-bold text-gray-700 uppercase">
+                <Scan size={14} className="text-purple-500" />
+                Tệp số
+              </label>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max={numFiles}
+                value={targetTepIndex + 1}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setTargetTepIndex(Math.max(0, Math.min(numFiles - 1, (parseInt(e.target.value) || 1) - 1)))}
+                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none font-bold text-base md:text-lg h-12 md:h-14"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2 flex items-end">
               <button
                 onClick={addMoreFiles}
-                className="w-full flex items-center justify-center gap-2 p-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg active:scale-95"
+                className="flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 p-2 md:p-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg active:scale-95 h-12 md:h-14"
               >
-                <PlusCircle size={20} />
-                Thêm 50 tệp (Hiện có: {numFiles})
+                <PlusCircle size={18} />
+                <span className="text-[10px] md:text-sm">Thêm tệp</span>
+              </button>
+              <button
+                onClick={() => setIsScannerOpen(true)}
+                className="flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 p-2 md:p-3 bg-purple-600 text-white rounded-xl font-bold hover:bg-purple-700 transition-all shadow-lg active:scale-95 h-12 md:h-14"
+              >
+                <Camera size={18} />
+                <span className="text-[10px] md:text-sm">Quét AI</span>
               </button>
             </div>
           </div>
         </div>
+
+        {isScannerOpen && (
+          <CameraScanner 
+            numCandidates={numCandidates}
+            numDelegates={numDelegates}
+            onScan={handleScanSuccess}
+            onClose={() => setIsScannerOpen(false)}
+          />
+        )}
 
         {/* Table Container with Horizontal Scroll */}
         <div className="bg-white rounded-xl shadow-2xl border border-gray-300 overflow-hidden">
@@ -424,33 +874,34 @@ export default function App() {
             <table className="w-full border-collapse text-xs md:text-sm table-fixed">
               <thead className="sticky top-0 z-20">
                 {/* Main Header */}
-                <tr className="bg-[#ffc000] text-black font-bold uppercase">
-                  <th className="border border-black p-2 w-12 sticky left-0 z-30 bg-[#ffc000]">TT</th>
-                  <th className="border border-black p-2 w-64 sticky left-12 z-30 bg-[#ffc000]">Họ và tên ứng cử viên</th>
-                  <th className="border border-black p-2 w-24 sticky left-[304px] z-30 bg-[#ffc000] text-center">CỘNG</th>
-                  <th className="border border-black p-2 w-20 sticky left-[400px] z-30 bg-[#ffc000] text-center">%</th>
+                <tr className="bg-[#ffc000] text-black font-bold uppercase text-[10px] md:text-xs">
+                  <th className="border border-black p-1 md:p-2 w-8 md:w-12 sticky left-0 z-30 bg-[#ffc000]">TT</th>
+                  <th className="border border-black p-1 md:p-2 w-40 md:w-64 sticky left-8 md:left-12 z-30 bg-[#ffc000]">Họ và tên ứng cử viên</th>
+                  <th className="border border-black p-1 md:p-2 w-16 md:w-24 sticky left-[192px] md:left-[304px] z-30 bg-[#ffc000] text-center">CỘNG</th>
+                  <th className="border border-black p-1 md:p-2 w-14 md:w-20 sticky left-[256px] md:left-[400px] z-30 bg-[#ffc000] text-center">%</th>
                   {Array.from({ length: numFiles }).map((_, i) => (
-                    <th key={i} className="border border-black p-2 w-20 min-w-[80px]">Tệp {i + 1}</th>
+                    <th key={i} className="border border-black p-1 md:p-2 w-16 md:w-20 min-w-[60px] md:min-w-[80px]">Tệp {i + 1}</th>
                   ))}
                 </tr>
                 
                 {/* Row: Số phiếu kiểm tra */}
-                <tr className="bg-white">
-                  <td className="border border-black p-2 text-center font-bold sticky left-0 z-10 bg-white">#</td>
-                  <td className="border border-black p-2 text-red-600 font-bold italic sticky left-12 z-10 bg-white">Số phiếu kiểm tra</td>
-                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-yellow-50 sticky left-[304px] z-10">
+                <tr className="bg-white text-[10px] md:text-xs">
+                  <td className="border border-black p-1 md:p-2 text-center font-bold sticky left-0 z-10 bg-white">#</td>
+                  <td className="border border-black p-1 md:p-2 text-red-600 font-bold italic sticky left-8 md:left-12 z-10 bg-white">Số phiếu kiểm tra</td>
+                  <td className="border border-black p-1 md:p-2 text-center font-bold text-red-600 bg-yellow-50 sticky left-[192px] md:left-[304px] z-10">
                     {totalCheckVotes}
                   </td>
-                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-yellow-50 sticky left-[400px] z-10">
+                  <td className="border border-black p-1 md:p-2 text-center font-bold text-red-600 bg-yellow-50 sticky left-[256px] md:left-[400px] z-10">
                     -
                   </td>
                   {checkVotes.map((val, i) => (
                     <td key={i} className="border border-black p-0">
                       <input
                         type="number"
+                        inputMode="numeric"
                         value={val || ''}
                         onChange={(e) => handleCheckVoteChange(i, e.target.value)}
-                        className="w-full h-full p-2 text-center text-red-600 font-bold border-none focus:ring-0 outline-none bg-transparent"
+                        className="w-full h-full p-1 md:p-2 text-center text-red-600 font-bold border-none focus:ring-0 outline-none bg-transparent"
                         placeholder="0"
                       />
                     </td>
@@ -458,36 +909,37 @@ export default function App() {
                 </tr>
               </thead>
               
-              <tbody>
+              <tbody className="text-[10px] md:text-sm">
                 {candidates.map((candidate, cIdx) => (
                   <tr key={cIdx} className="hover:bg-gray-50 group">
-                    <td className="border border-black p-2 text-center font-medium text-gray-400 sticky left-0 z-10 bg-white group-hover:bg-gray-50">
+                    <td className="border border-black p-1 md:p-2 text-center font-medium text-gray-400 sticky left-0 z-10 bg-white group-hover:bg-gray-50">
                       {cIdx + 1}
                     </td>
-                    <td className="border border-black p-0 sticky left-12 z-10 bg-white group-hover:bg-gray-50">
+                    <td className="border border-black p-0 sticky left-8 md:left-12 z-10 bg-white group-hover:bg-gray-50">
                       <input
                         type="text"
                         value={candidate.name}
                         onChange={(e) => handleCandidateNameChange(cIdx, e.target.value)}
-                        className="w-full p-2 font-semibold text-gray-800 border-none focus:ring-0 outline-none bg-transparent"
-                        placeholder={`Tên ứng cử viên ${cIdx + 1}`}
+                        className="w-full p-1 md:p-2 font-semibold text-gray-800 border-none focus:ring-0 outline-none bg-transparent"
+                        placeholder={`Tên ${cIdx + 1}`}
                       />
                     </td>
-                    <td className="border border-black p-2 text-center font-bold bg-yellow-50 text-blue-700 sticky left-[304px] z-10 group-hover:bg-yellow-100">
+                    <td className="border border-black p-1 md:p-2 text-center font-bold bg-yellow-50 text-blue-700 sticky left-[192px] md:left-[304px] z-10 group-hover:bg-yellow-100">
                       {rowTotals[cIdx]}
                     </td>
-                    <td className="border border-black p-2 text-center font-bold bg-blue-50 text-blue-800 sticky left-[400px] z-10 group-hover:bg-blue-100">
-                      {totalCheckVotes > 0 ? ((rowTotals[cIdx] / totalCheckVotes) * 100).toFixed(2) : '0.00'}%
+                    <td className="border border-black p-1 md:p-2 text-center font-bold bg-blue-50 text-blue-800 sticky left-[256px] md:left-[400px] z-10 group-hover:bg-blue-100">
+                      {totalCheckVotes > 0 ? ((rowTotals[cIdx] / totalCheckVotes) * 100).toFixed(1) : '0.0'}%
                     </td>
                     {candidate.votes.map((vote, vIdx) => (
                       <td key={vIdx} className="border border-black p-0">
                         <input
                           type="number"
+                          inputMode="numeric"
                           min="0"
                           value={vote || ''}
                           onChange={(e) => handleVoteChange(cIdx, vIdx, e.target.value)}
                           className={cn(
-                            "w-full h-full p-2 text-center border-none focus:ring-1 focus:ring-blue-300 outline-none transition-all",
+                            "w-full h-full p-1 md:p-2 text-center border-none focus:ring-1 focus:ring-blue-300 outline-none transition-all",
                             vote > checkVotes[vIdx] && checkVotes[vIdx] > 0 ? "bg-red-100 text-red-600 font-bold" : "bg-transparent"
                           )}
                           placeholder="0"
@@ -498,19 +950,19 @@ export default function App() {
                 ))}
               </tbody>
 
-              <tfoot className="sticky bottom-0 z-20">
+              <tfoot className="sticky bottom-0 z-20 bg-gray-100 font-bold text-[10px] md:text-xs">
                 {/* Tổng số phiếu */}
                 <tr className="bg-gray-100">
-                  <td className="border border-black p-2 sticky left-0 z-10 bg-gray-100"></td>
-                  <td className="border border-black p-2 text-red-600 font-bold uppercase sticky left-12 z-10 bg-gray-100">Tổng số phiếu</td>
-                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-red-50 sticky left-[304px] z-10">
+                  <td className="border border-black p-1 md:p-2 sticky left-0 z-10 bg-gray-100"></td>
+                  <td className="border border-black p-1 md:p-2 text-red-600 font-bold uppercase sticky left-8 md:left-12 z-10 bg-gray-100">Tổng số phiếu</td>
+                  <td className="border border-black p-1 md:p-2 text-center font-bold text-red-600 bg-red-50 sticky left-[192px] md:left-[304px] z-10">
                     {rowTotals.reduce((a, b) => a + b, 0)}
                   </td>
-                  <td className="border border-black p-2 text-center font-bold text-red-600 bg-red-50 sticky left-[400px] z-10">
+                  <td className="border border-black p-1 md:p-2 text-center font-bold text-red-600 bg-red-50 sticky left-[256px] md:left-[400px] z-10">
                     -
                   </td>
                   {colTotals.map((total, i) => (
-                    <td key={i} className="border border-black p-2 text-center font-bold text-red-600">
+                    <td key={i} className="border border-black p-1 md:p-2 text-center font-bold text-red-600">
                       {total}
                     </td>
                   ))}
@@ -518,20 +970,20 @@ export default function App() {
 
                 {/* Kiểm tra Đúng/Sai */}
                 <tr className="bg-[#ffc000]">
-                  <td className="border border-black p-2 sticky left-0 z-10 bg-[#ffc000]"></td>
-                  <td className="border border-black p-2 font-bold uppercase sticky left-12 z-10 bg-[#ffc000]">Kiểm tra Đúng/Sai</td>
+                  <td className="border border-black p-1 md:p-2 sticky left-0 z-10 bg-[#ffc000]"></td>
+                  <td className="border border-black p-1 md:p-2 font-bold uppercase sticky left-8 md:left-12 z-10 bg-[#ffc000]">Kiểm tra Đúng/Sai</td>
                   <td className={cn(
-                    "border border-black p-2 text-center font-black sticky left-[304px] z-10",
+                    "border border-black p-1 md:p-2 text-center font-black sticky left-[192px] md:left-[304px] z-10",
                     isGrandTotalValid ? "text-green-700" : "text-red-700"
                   )}>
                     {isGrandTotalValid ? "ĐÚNG" : "SAI"}
                   </td>
-                  <td className="border border-black p-2 sticky left-[400px] z-10 bg-[#ffc000]"></td>
+                  <td className="border border-black p-1 md:p-2 sticky left-[256px] md:left-[400px] z-10 bg-[#ffc000]"></td>
                   {validationResults.map((isValid, i) => (
                     <td 
                       key={i} 
                       className={cn(
-                        "border border-black p-2 text-center font-black",
+                        "border border-black p-1 md:p-2 text-center font-black",
                         isValid ? "text-black" : "text-red-600"
                       )}
                     >
@@ -545,30 +997,29 @@ export default function App() {
         </div>
 
         {/* Bottom Actions */}
-        <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-white p-6 rounded-xl shadow-md border border-gray-200">
-          <div className="flex flex-wrap gap-4">
+        <div className="flex flex-col md:flex-row gap-3 md:gap-4 items-center justify-between bg-white p-4 md:p-6 rounded-xl shadow-md border border-gray-200">
+          <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 md:gap-4 w-full md:w-auto">
             <button
               onClick={handleExportExcel}
-              className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-all shadow-lg active:scale-95"
+              className="flex items-center justify-center gap-2 px-4 md:px-6 py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition-all shadow-lg active:scale-95 text-xs md:text-base"
             >
-              <Download size={20} />
-              Tải file Excel
+              <Download size={18} />
+              <span className="hidden md:inline">Tải file Excel</span>
+              <span className="md:hidden">Excel</span>
             </button>
 
             <button
               onClick={() => window.location.reload()}
-              className="flex items-center gap-2 px-6 py-3 bg-gray-800 text-white rounded-xl font-bold hover:bg-black transition-all shadow-lg active:scale-95"
+              className="flex items-center justify-center gap-2 px-4 md:px-6 py-3 bg-gray-800 text-white rounded-xl font-bold hover:bg-black transition-all shadow-lg active:scale-95 text-xs md:text-base"
             >
-              <RefreshCw size={20} />
-              Làm mới trang
+              <RefreshCw size={18} />
+              <span className="hidden md:inline">Làm mới trang</span>
+              <span className="md:hidden">Làm mới</span>
             </button>
             
             <button
-              onClick={() => {
-                setIsLoggedIn(false);
-                setCurrentUser(null);
-              }}
-              className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg active:scale-95"
+              onClick={handleLogout}
+              className="col-span-2 md:col-span-1 flex items-center justify-center gap-2 px-4 md:px-6 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg active:scale-95 text-xs md:text-base"
             >
               Đăng xuất
             </button>

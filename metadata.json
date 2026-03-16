@@ -1,5 +1,5 @@
 {
   "name": "Hệ Thống Kiểm Phiếu Bầu Cử",
   "description": "Ứng dụng hỗ trợ kiểm phiếu bầu cử Quốc hội và HĐND các cấp, tích hợp kiểm tra logic và lưu trữ dữ liệu.",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["camera"]
 }

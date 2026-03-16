@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - email: string (required)
+    //   - displayName: string (optional)
+    //   - lastLevel: string (optional)
+    //
+    // Collection: users/{userId}/levels
+    // Document ID: {levelId} (e.g., "BCH", "BTV")
+    // Fields:
+    //   - numCandidates: number (required)
+    //   - numDelegates: number (required)
+    //   - candidates: list of maps (required)
+    //   - checkVotes: list of numbers (required)
+    //   - updatedAt: timestamp (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['email', 'displayName', 'lastLevel']) &&
+             data.email is string && isValidEmail(data.email);
+    }
+
+    function isValidLevel(data) {
+      return hasOnlyAllowedFields(['numCandidates', 'numDelegates', 'candidates', 'checkVotes', 'updatedAt']) &&
+             data.numCandidates is int && data.numCandidates > 0 &&
+             data.numDelegates is int && data.numDelegates > 0 &&
+             data.candidates is list &&
+             data.checkVotes is list;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userEmail} {
+      allow read, write: if isAuthenticated();
+
+      match /levels/{levelId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -17,9 +17,9 @@ function setup() {
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(["Phone", "Password", "Name", "Role"]);
+    sheet.appendRow(["Email", "Password", "Name", "Role"]);
     // Tài khoản mặc định
-    sheet.appendRow(["0366000555", "123456@", "Đào Minh Tâm", "admin"]);
+    sheet.appendRow(["admin@gmail.com", "123456@", "Đào Minh Tâm", "admin"]);
   }
 }
 
@@ -32,9 +32,9 @@ function doPost(e) {
     const action = data.action;
     
     if (action === "login") {
-      return loginUser(data.phone, data.password);
+      return loginUser(data.email, data.password);
     } else if (action === "register") {
-      return registerUser(data.phone, data.password, data.name);
+      return registerUser(data.email, data.password, data.name);
     }
     
     return response({ success: false, message: "Hành động không hợp lệ" });
@@ -46,7 +46,7 @@ function doPost(e) {
 /**
  * Kiểm tra đăng nhập
  */
-function loginUser(phone, password) {
+function loginUser(email, password) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
@@ -57,23 +57,23 @@ function loginUser(phone, password) {
   const data = sheet.getDataRange().getValues();
   
   for (let i = 1; i < data.length; i++) {
-    const sPhone = data[i][0].toString().trim();
+    const sEmail = data[i][0].toString().trim();
     const sPass = data[i][1].toString().trim();
     
-    if (sPhone === phone.toString().trim() && sPass === password.toString().trim()) {
+    if (sEmail.toLowerCase() === email.toString().trim().toLowerCase() && sPass === password.toString().trim()) {
       return response({ 
         success: true, 
-        user: { phone: data[i][0], name: data[i][2], role: data[i][3] } 
+        user: { email: data[i][0], name: data[i][2], role: data[i][3] } 
       });
     }
   }
-  return response({ success: false, message: "Số điện thoại hoặc mật khẩu không đúng!" });
+  return response({ success: false, message: "Email hoặc mật khẩu không đúng!" });
 }
 
 /**
  * Đăng ký tài khoản mới (Dùng để bạn tự thêm thủ công hoặc qua API)
  */
-function registerUser(phone, password, name) {
+function registerUser(email, password, name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
@@ -83,12 +83,12 @@ function registerUser(phone, password, name) {
   
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
-    if (data[i][0].toString() === phone.toString()) {
-      return response({ success: false, message: "Số điện thoại này đã tồn tại!" });
+    if (data[i][0].toString().toLowerCase() === email.toString().toLowerCase()) {
+      return response({ success: false, message: "Email này đã tồn tại!" });
     }
   }
   
-  sheet.appendRow([phone, password, name, "user"]);
+  sheet.appendRow([email, password, name, "user"]);
   return response({ success: true, message: "Đã tạo tài khoản thành công!" });
 }
 
